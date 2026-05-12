@@ -1,0 +1,74 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "2GIS — Друзья на карте",
+        "description": "Введите данные вашего аккаунта 2GIS",
+        "data": {
+          "email": "Email",
+          "password": "Пароль"
+        }
+      },
+      "friends": {
+        "title": "Выберите друзей",
+        "description": "Отметьте друзей, которых хотите отслеживать в Home Assistant",
+        "data": {
+          "selected_friends": "Друзья"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Неверный email или пароль"
+    },
+    "abort": {
+      "already_configured": "Аккаунт уже добавлен"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Настройка друзей",
+        "description": "Выберите, кого отслеживать",
+        "data": {
+          "selected_friends": "Друзья"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery": {
+        "name": "Батарея"
+      },
+      "movement": {
+        "name": "Движение",
+        "state": {
+          "stopped":  "Стоит",
+          "moving":   "Едет",
+          "noGeo":    "Нет GPS",
+          "unknown":  "Неизвестно"
+        }
+      },
+      "place": {
+        "name": "Место",
+        "state": {
+          "home":     "Дом",
+          "work":     "Работа",
+          "shop":     "Магазин",
+          "unknown":  "Неизвестно"
+        }
+      },
+      "speed": {
+        "name": "Скорость"
+      },
+      "distance": {
+        "name": "Расстояние от дома"
+      }
+    },
+    "binary_sensor": {
+      "charging": {
+        "name": "Зарядка"
+      }
+    }
+  }
+}

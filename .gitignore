@@ -1,0 +1,26 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.log
+
+# Exploration/dev scripts — not part of the integration
+_authdig.py
+_authflow.py
+cdp_token.py
+_explore.py
+_fetch_friends.py
+_find_refresh.py
+_get_icon.py
+get_token.py
+_jsdig.py
+_login_test.py
+_signin_dig.py
+_token_after_login.py
+_try_access_token.py
+zond2gis_icon_fix.js
+zond2mqtt.py
+scout.py
+token_hunter.py
+requirements.txt
+shell.nix

@@ -1,0 +1,74 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "2GIS Friends on Map",
+        "description": "Enter your 2GIS account credentials",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "friends": {
+        "title": "Select friends",
+        "description": "Choose which friends to track in Home Assistant",
+        "data": {
+          "selected_friends": "Friends"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid email or password"
+    },
+    "abort": {
+      "already_configured": "Account already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Friend settings",
+        "description": "Choose who to track",
+        "data": {
+          "selected_friends": "Friends"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery": {
+        "name": "Battery"
+      },
+      "movement": {
+        "name": "Movement",
+        "state": {
+          "stopped":  "Stopped",
+          "moving":   "Moving",
+          "noGeo":    "No GPS",
+          "unknown":  "Unknown"
+        }
+      },
+      "place": {
+        "name": "Place",
+        "state": {
+          "home":     "Home",
+          "work":     "Work",
+          "shop":     "Shop",
+          "unknown":  "Unknown"
+        }
+      },
+      "speed": {
+        "name": "Speed"
+      },
+      "distance": {
+        "name": "Distance from Home"
+      }
+    },
+    "binary_sensor": {
+      "charging": {
+        "name": "Charging"
+      }
+    }
+  }
+}
