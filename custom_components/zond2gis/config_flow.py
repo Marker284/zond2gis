@@ -1,9 +1,12 @@
 """Config flow + Options flow — логин и выбор друзей."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import voluptuous as vol
+
+_LOGGER = logging.getLogger(__name__)
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import callback
@@ -44,6 +47,7 @@ class ZondConfigFlow(ConfigFlow, domain=DOMAIN):
                     validate_credentials, self._email, self._password
                 )
             except Exception:
+                _LOGGER.exception("Login failed for %s", self._email)
                 errors["base"] = "invalid_auth"
             else:
                 await self.async_set_unique_id(self._email.lower())
