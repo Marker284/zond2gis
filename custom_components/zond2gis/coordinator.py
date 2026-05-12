@@ -283,7 +283,8 @@ class ZondCoordinator:
 
         movement = s.get("movement") or {}
         if "status" in movement:
-            st.movement = movement["status"]
+            raw = movement["status"]
+            st.movement = "no_geo" if raw == "noGeo" else raw
 
         place = s.get("locationPlace") or {}
         status = (place.get("status") or {}).get("id")

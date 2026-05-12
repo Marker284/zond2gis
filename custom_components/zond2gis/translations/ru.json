@@ -45,7 +45,7 @@
         "state": {
           "stopped":  "Стоит",
           "moving":   "Едет",
-          "noGeo":    "Нет GPS",
+          "no_geo":   "Нет GPS",
           "unknown":  "Неизвестно"
         }
       },

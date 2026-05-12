@@ -1,12 +1,13 @@
 {
   "domain": "zond2gis",
   "name": "2GIS Friends on Map",
-  "version": "1.0.0",
-  "documentation": "https://github.com/Marker284/zond2gis",
-  "requirements": ["requests>=2.28", "websockets>=12.0"],
-  "dependencies": [],
   "codeowners": ["@Marker284"],
   "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/Marker284/zond2gis",
+  "integration_type": "hub",
   "iot_class": "cloud_push",
-  "integration_type": "hub"
+  "issue_tracker": "https://github.com/Marker284/zond2gis/issues",
+  "requirements": ["requests>=2.28", "websockets>=12.0"],
+  "version": "1.0.0"
 }
