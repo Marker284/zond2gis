@@ -107,3 +107,9 @@ This integration uses an **unofficial, undocumented** internal API of 2GIS. It i
 ## Отказ от ответственности
 
 Интеграция использует **неофициальный внутренний API** 2GIS. Не является официальным продуктом 2GIS.
+
+---
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).
