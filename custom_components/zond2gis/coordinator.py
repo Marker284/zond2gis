@@ -17,6 +17,7 @@ _LOGGER = logging.getLogger(__name__)
 
 ZOND_WS_BASE  = "wss://zond.api.2gis.ru/api/1.1"
 UNAVAILABLE_THRESHOLD_MS = 86_400_000  # 1 день в миллисекундах
+IDLE_TIMEOUT = 300  # сек без единого сообщения от WS — считаем фид подвисшим
 ZOND_CHANNELS = "markers,sharing,routes"
 APP_VERSION   = "6.31.0"
 ORIGIN        = "https://2gis.kz"
@@ -168,8 +169,20 @@ class ZondCoordinator:
                 ) as ws:
                     _LOGGER.info("WebSocket подключён")
                     delay = 5
-                    async for raw in ws:
+                    # WS-пинги подтверждают, что TCP-соединение живо, но не
+                    # гарантируют, что бэкенд продолжает слать friendState —
+                    # известны случаи "тихого" зависания фида. Поэтому ждём
+                    # каждое сообщение с таймаутом и переподключаемся, если
+                    # данные не приходят слишком долго.
+                    while True:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=IDLE_TIMEOUT)
                         await self._handle_message(raw)
+
+            except TimeoutError:
+                _LOGGER.warning(
+                    "Нет данных от WS более %ds — считаем соединение подвисшим, переподключаемся",
+                    IDLE_TIMEOUT,
+                )
 
             except websockets.exceptions.ConnectionClosedError as exc:
                 code = getattr(exc, "code", None)
