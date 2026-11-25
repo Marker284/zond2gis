@@ -34,6 +34,8 @@ async def async_setup_entry(
             hass, SIGNAL_NEW_FRIEND.format(entry.entry_id), _on_new_friends
         )
     )
+    # Друзья, о которых координатор уже узнал до подписки платформы.
+    _on_new_friends(list(coordinator.states))
 
 
 class ZondChargingSensor(BinarySensorEntity):

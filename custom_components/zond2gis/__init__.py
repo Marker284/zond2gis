@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 
 from .coordinator import ZondCoordinator
 from .config_flow import CONF_SELECTED_FRIENDS
@@ -15,6 +15,13 @@ PLATFORMS = [Platform.DEVICE_TRACKER, Platform.SENSOR, Platform.BINARY_SENSOR]
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     selected = entry.options.get(CONF_SELECTED_FRIENDS)  # None = все
 
+    @callback
+    def _save_token(access_token: str, expires_at: float) -> None:
+        hass.config_entries.async_update_entry(
+            entry,
+            data={**entry.data, "access_token": access_token, "expires_at": expires_at},
+        )
+
     coordinator = ZondCoordinator(
         hass=hass,
         entry_id=entry.entry_id,
@@ -23,12 +30,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         access_token=entry.data["access_token"],
         expires_at=entry.data["expires_at"],
         selected_friends=selected,
+        on_token_refreshed=_save_token,
     )
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    await coordinator.async_start()
+    # Сначала платформы подписываются на сигналы, потом стартует WS —
+    # иначе initialState может прийти раньше, чем появятся слушатели.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    await coordinator.async_start()
 
     # Перезагружаем entry при изменении options (выбор друзей)
     entry.async_on_unload(

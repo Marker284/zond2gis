@@ -6,18 +6,23 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import requests
 import websockets
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.util.ssl import client_context
 
 _LOGGER = logging.getLogger(__name__)
 
 ZOND_WS_BASE  = "wss://zond.api.2gis.ru/api/1.1"
 UNAVAILABLE_THRESHOLD_MS = 86_400_000  # 1 день в миллисекундах
 IDLE_TIMEOUT = 300  # сек без единого сообщения от WS — считаем фид подвисшим
+# Сколько подряд соединений может закончиться без initialState, прежде чем
+# мы перестанем доверять токену и перелогинимся.
+MAX_EMPTY_SESSIONS = 3
+AUTH_CLOSE_CODES = (4001, 4003, 401, 403)
 ZOND_CHANNELS = "markers,sharing,routes"
 APP_VERSION   = "6.31.0"
 ORIGIN        = "https://2gis.kz"
@@ -39,12 +44,6 @@ class FriendProfile:
 class FriendState:
     uid:         str
     last_seen:   int   = 0
-
-    def is_available(self) -> bool:
-        if not self.last_seen:
-            return False
-        import time
-        return (time.time() * 1000 - self.last_seen) < UNAVAILABLE_THRESHOLD_MS
     lat:         float | None = None
     lon:         float | None = None
     accuracy:    float | None = None
@@ -53,6 +52,11 @@ class FriendState:
     is_charging: bool  = False
     movement:    str   = "unknown"
     place:       str   = "unknown"
+
+    def is_available(self) -> bool:
+        if not self.last_seen:
+            return False
+        return (time.time() * 1000 - self.last_seen) < UNAVAILABLE_THRESHOLD_MS
 
 
 def _do_login(email: str, password: str) -> dict:
@@ -95,7 +99,9 @@ class ZondCoordinator:
     def __init__(self, hass: HomeAssistant, entry_id: str,
                  email: str, password: str,
                  access_token: str, expires_at: float,
-                 selected_friends: list[str] | None = None) -> None:
+                 selected_friends: list[str] | None = None,
+                 on_token_refreshed: Callable[[str, float], None] | None = None,
+                 ) -> None:
         self.hass         = hass
         self.entry_id     = entry_id
         self.email        = email
@@ -110,8 +116,12 @@ class ZondCoordinator:
         self.profiles: dict[str, FriendProfile] = {}
         self.states:   dict[str, FriendState]   = {}
 
+        self._on_token_refreshed = on_token_refreshed
+
         self._task:    asyncio.Task | None = None
         self._running: bool = False
+        self._got_initial: bool = False
+        self._empty_sessions: int = 0
 
     def is_friend_selected(self, uid: str) -> bool:
         """Проверяет, выбран ли этот друг пользователем."""
@@ -133,6 +143,9 @@ class ZondCoordinator:
         )
         self.access_token = result["access_token"]
         self.expires_at   = result["expires_at"]
+        self._empty_sessions = 0
+        if self._on_token_refreshed:
+            self._on_token_refreshed(self.access_token, self.expires_at)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -156,6 +169,7 @@ class ZondCoordinator:
     async def _ws_loop(self) -> None:
         delay = 5
         while self._running:
+            self._got_initial = False
             try:
                 await self._refresh_token()
                 url = (f"{ZOND_WS_BASE}/user/ws"
@@ -166,6 +180,9 @@ class ZondCoordinator:
                     additional_headers={"Origin": ORIGIN},
                     ping_interval=30,
                     ping_timeout=10,
+                    # SSL-контекст HA создаётся заранее и кэшируется: иначе
+                    # websockets грузит сертификаты прямо в event loop.
+                    ssl=client_context(),
                 ) as ws:
                     _LOGGER.info("WebSocket подключён")
                     delay = 5
@@ -184,23 +201,49 @@ class ZondCoordinator:
                     IDLE_TIMEOUT,
                 )
 
-            except websockets.exceptions.ConnectionClosedError as exc:
-                code = getattr(exc, "code", None)
+            except websockets.exceptions.ConnectionClosed as exc:
+                code = exc.rcvd.code if exc.rcvd else None
                 _LOGGER.warning("WS закрыт (code=%s): %s", code, exc)
-                if code in (4001, 4003, 401):
-                    self.expires_at = 0  # принудительный перелогин
+                if code in AUTH_CLOSE_CODES:
+                    self._force_relogin("сервер закрыл WS с кодом %s" % code)
+
+            except websockets.exceptions.InvalidStatus as exc:
+                status = exc.response.status_code
+                _LOGGER.warning("WS отклонён при подключении: HTTP %s", status)
+                if status in (401, 403):
+                    self._force_relogin("HTTP %s при подключении" % status)
 
             except (OSError, websockets.exceptions.WebSocketException) as exc:
                 _LOGGER.warning("WS ошибка: %s", exc)
+
+            except asyncio.CancelledError:
+                raise
 
             except Exception:
                 _LOGGER.exception("Неожиданная ошибка в WS loop")
 
             if not self._running:
                 break
+
+            # Сессия без initialState — признак того, что бэкенд нас не
+            # принимает (например, токен отозван без явного кода закрытия).
+            if self._got_initial:
+                self._empty_sessions = 0
+            else:
+                self._empty_sessions += 1
+                if self._empty_sessions >= MAX_EMPTY_SESSIONS:
+                    self._force_relogin(
+                        "%d соединений подряд без initialState" % self._empty_sessions
+                    )
+
             _LOGGER.debug("Переподключение через %ds…", delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, 60)
+
+    def _force_relogin(self, reason: str) -> None:
+        _LOGGER.warning("Принудительный перелогин: %s", reason)
+        self.expires_at = 0
+        self._empty_sessions = 0
 
     async def _handle_message(self, raw: str) -> None:
         try:
@@ -222,7 +265,7 @@ class ZondCoordinator:
         profiles = payload.get("profiles", [])
         states   = payload.get("states", [])
 
-        new_uids: list[str] = []
+        self._got_initial = True
 
         for p in profiles:
             uid = p["id"]
@@ -233,18 +276,20 @@ class ZondCoordinator:
             )
             if uid not in self.states and self.is_friend_selected(uid):
                 self.states[uid] = FriendState(uid=uid)
-                new_uids.append(uid)
 
         for s in states:
             if self.is_friend_selected(s.get("id", "")):
                 self._apply_state(s)
 
-        # Сигнализируем платформам о новых друзьях
-        if new_uids:
+        # Объявляем платформам всех друзей при каждом initialState, а не
+        # только новых: платформы сами отбрасывают уже добавленных. Иначе
+        # сигнал, отправленный до подписки платформ (гонка при старте HA),
+        # терялся навсегда, и сущности висели restored/unavailable до reload.
+        if self.states:
             async_dispatcher_send(
                 self.hass,
                 SIGNAL_NEW_FRIEND.format(self.entry_id),
-                new_uids,
+                list(self.states),
             )
 
         # Обновляем все существующие сущности
