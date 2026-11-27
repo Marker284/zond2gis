@@ -15,13 +15,23 @@
         "data": {
           "selected_friends": "Friends"
         }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate 2GIS",
+        "description": "2GIS rejected the saved password for {email}. Enter the current password.",
+        "data": {
+          "password": "Password"
+        }
       }
     },
     "error": {
-      "invalid_auth": "Invalid email or password"
+      "invalid_auth": "Invalid email or password",
+      "cannot_connect": "Failed to connect to 2GIS, try again later",
+      "unknown": "Unexpected error"
     },
     "abort": {
-      "already_configured": "Account already configured"
+      "already_configured": "Account already configured",
+      "reauth_successful": "Re-authentication was successful"
     }
   },
   "options": {
@@ -33,6 +43,11 @@
           "selected_friends": "Friends"
         }
       }
+    },
+    "abort": {
+      "invalid_auth": "Invalid email or password",
+      "cannot_connect": "Failed to connect to 2GIS, try again later",
+      "unknown": "Unexpected error"
     }
   },
   "entity": {
@@ -43,19 +58,19 @@
       "movement": {
         "name": "Movement",
         "state": {
-          "stopped":  "Stopped",
-          "moving":   "Moving",
-          "no_geo":   "No GPS",
-          "unknown":  "Unknown"
+          "stopped": "Stopped",
+          "moving": "Moving",
+          "no_geo": "No GPS",
+          "unknown": "Unknown"
         }
       },
       "place": {
         "name": "Place",
         "state": {
-          "home":     "Home",
-          "work":     "Work",
-          "shop":     "Shop",
-          "unknown":  "Unknown"
+          "home": "Home",
+          "work": "Work",
+          "shop": "Shop",
+          "unknown": "Unknown"
         }
       },
       "speed": {

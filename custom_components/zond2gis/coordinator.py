@@ -29,6 +29,11 @@ ORIGIN        = "https://2gis.kz"
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
+# После принудительного перелогина не повторяем его раньше этого срока:
+# если сервер отвергает и свежий токен, долбить вход каждую минуту нельзя.
+RELOGIN_COOLDOWN = 600
+SIGN_IN_REJECTED = (400, 401, 403)
+
 SIGNAL_NEW_FRIEND    = "zond2gis_new_friend_{}"      # .format(entry_id)
 SIGNAL_UPDATE_FRIEND = "zond2gis_update_{}_{}"       # .format(entry_id, uid)
 
@@ -59,23 +64,45 @@ class FriendState:
         return (time.time() * 1000 - self.last_seen) < UNAVAILABLE_THRESHOLD_MS
 
 
+class AuthFailed(Exception):
+    """2GIS отверг вход: неверный email/пароль или аккаунт заблокирован."""
+
+
+class CannotConnect(Exception):
+    """Сеть или сервер 2GIS недоступны — имеет смысл повторить позже."""
+
+
 def _do_login(email: str, password: str) -> dict:
-    """Синхронный логин — вызываем через executor."""
-    resp = requests.post(
-        "https://id.2gis.com/api/v1/sign_in",
-        json={"grant_type": "password", "username": email,
-              "password": password, "locale": "ru"},
-        headers={"Content-Type": "application/json",
-                 "Origin": "https://id.2gis.com",
-                 "User-Agent": UA},
-        timeout=15,
-    )
-    resp.raise_for_status()
+    """Синхронный логин — вызываем через executor.
+
+    Бросает AuthFailed, если вход отвергнут, и CannotConnect при сетевых
+    ошибках и ошибках сервера.
+    """
+    try:
+        resp = requests.post(
+            "https://id.2gis.com/api/v1/sign_in",
+            json={"grant_type": "password", "username": email,
+                  "password": password, "locale": "ru"},
+            headers={"Content-Type": "application/json",
+                     "Origin": "https://id.2gis.com",
+                     "User-Agent": UA},
+            timeout=15,
+        )
+    except requests.exceptions.RequestException as exc:
+        raise CannotConnect(str(exc)) from exc
+
+    if resp.status_code in SIGN_IN_REJECTED:
+        raise AuthFailed(f"HTTP {resp.status_code}")
+    if not resp.ok:
+        raise CannotConnect(f"HTTP {resp.status_code}")
+
     cookies = resp.cookies
     access  = cookies.get("id_access_token")
     refresh = cookies.get("id_refresh_token")
     if not access:
-        raise ValueError(f"Токен не получен: {resp.text[:200]}")
+        # Вход «прошёл», но токена нет (капча, подтверждение и т.п.) —
+        # автоматически это не исправится, нужен человек.
+        raise AuthFailed(f"Токен не получен: {resp.text[:200]}")
 
     cookie_obj = resp.cookies._cookies.get("id.2gis.com", {}).get("/", {}).get("id_access_token")
     expires_at = cookie_obj.expires if (cookie_obj and cookie_obj.expires) else time.time() + 86400 * 365
@@ -101,6 +128,7 @@ class ZondCoordinator:
                  access_token: str, expires_at: float,
                  selected_friends: list[str] | None = None,
                  on_token_refreshed: Callable[[str, float], None] | None = None,
+                 on_auth_failed: Callable[[], None] | None = None,
                  ) -> None:
         self.hass         = hass
         self.entry_id     = entry_id
@@ -117,6 +145,8 @@ class ZondCoordinator:
         self.states:   dict[str, FriendState]   = {}
 
         self._on_token_refreshed = on_token_refreshed
+        self._on_auth_failed = on_auth_failed
+        self._last_login: float = 0.0
 
         self._task:    asyncio.Task | None = None
         self._running: bool = False
@@ -138,6 +168,7 @@ class ZondCoordinator:
         if time.time() < self.expires_at - 3600:
             return
         _LOGGER.info("Токен истекает, перелогиниваемся…")
+        self._last_login = time.time()
         result = await self.hass.async_add_executor_job(
             _do_login, self.email, self.password
         )
@@ -195,6 +226,21 @@ class ZondCoordinator:
                         raw = await asyncio.wait_for(ws.recv(), timeout=IDLE_TIMEOUT)
                         await self._handle_message(raw)
 
+            except AuthFailed as exc:
+                # Повторять вход со старым паролем бессмысленно и опасно
+                # (2GIS может заблокировать аккаунт) — просим пользователя
+                # ввести пароль заново и останавливаемся.
+                _LOGGER.error(
+                    "2GIS отверг вход (%s) — нужна повторная авторизация", exc
+                )
+                self._running = False
+                if self._on_auth_failed:
+                    self._on_auth_failed()
+                break
+
+            except CannotConnect as exc:
+                _LOGGER.warning("Не удалось войти в 2GIS: %s", exc)
+
             except TimeoutError:
                 _LOGGER.warning(
                     "Нет данных от WS более %ds — считаем соединение подвисшим, переподключаемся",
@@ -241,9 +287,15 @@ class ZondCoordinator:
             delay = min(delay * 2, 60)
 
     def _force_relogin(self, reason: str) -> None:
+        self._empty_sessions = 0
+        since = time.time() - self._last_login
+        if since < RELOGIN_COOLDOWN:
+            _LOGGER.warning(
+                "%s, но перелогин был %ds назад — пока не повторяем", reason, since
+            )
+            return
         _LOGGER.warning("Принудительный перелогин: %s", reason)
         self.expires_at = 0
-        self._empty_sessions = 0
 
     async def _handle_message(self, raw: str) -> None:
         try:

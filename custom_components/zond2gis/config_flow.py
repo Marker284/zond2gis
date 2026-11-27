@@ -1,12 +1,12 @@
-"""Config flow + Options flow — логин и выбор друзей."""
+"""Config flow + Options flow — логин, повторная авторизация и выбор друзей."""
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
 
-_LOGGER = logging.getLogger(__name__)
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import callback
@@ -16,15 +16,43 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 
-from .coordinator import validate_credentials
+from .coordinator import AuthFailed, CannotConnect, validate_credentials
+
+_LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "zond2gis"
 CONF_SELECTED_FRIENDS = "selected_friends"
 
 
+def _friends_schema(friends: list[dict], default: list[str]) -> vol.Schema:
+    return vol.Schema({
+        vol.Required(CONF_SELECTED_FRIENDS, default=default):
+            SelectSelector(SelectSelectorConfig(
+                options=[{"value": f["uid"], "label": f["name"]} for f in friends],
+                multiple=True,
+                mode=SelectSelectorMode.LIST,
+            )),
+    })
+
+
+async def _async_login(hass, email: str, password: str, errors: dict[str, str]) -> dict | None:
+    """Логинится и раскладывает ошибки по кодам формы. None — вход не удался."""
+    try:
+        return await hass.async_add_executor_job(validate_credentials, email, password)
+    except AuthFailed as exc:
+        _LOGGER.debug("2GIS отверг вход для %s: %s", email, exc)
+        errors["base"] = "invalid_auth"
+    except CannotConnect as exc:
+        _LOGGER.debug("Нет связи с 2GIS: %s", exc)
+        errors["base"] = "cannot_connect"
+    except Exception:
+        _LOGGER.exception("Неожиданная ошибка при входе в 2GIS")
+        errors["base"] = "unknown"
+    return None
+
+
 class ZondConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
-    icon = "mdi:map-marker-account"
 
     def __init__(self) -> None:
         self._email:    str = ""
@@ -42,28 +70,31 @@ class ZondConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._email    = user_input[CONF_EMAIL].strip()
             self._password = user_input[CONF_PASSWORD]
-            try:
-                self._token_data = await self.hass.async_add_executor_job(
-                    validate_credentials, self._email, self._password
-                )
-            except Exception:
-                _LOGGER.exception("Login failed for %s", self._email)
-                errors["base"] = "invalid_auth"
-            else:
-                await self.async_set_unique_id(self._email.lower())
-                self._abort_if_unique_id_configured()
-                # Сохраняем список друзей для шага 2
-                self._all_friends = await self.hass.async_add_executor_job(
-                    _fetch_friend_list, self._token_data["access_token"]
-                )
-                return await self.async_step_friends()
+            await self.async_set_unique_id(self._email.lower())
+            self._abort_if_unique_id_configured()
+
+            token_data = await _async_login(self.hass, self._email, self._password, errors)
+            if token_data is not None:
+                self._token_data = token_data
+                try:
+                    self._all_friends = await self.hass.async_add_executor_job(
+                        _fetch_friend_list, token_data["access_token"]
+                    )
+                except CannotConnect as exc:
+                    _LOGGER.debug("Не удалось получить список друзей: %s", exc)
+                    errors["base"] = "cannot_connect"
+                else:
+                    return await self.async_step_friends()
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema({
-                vol.Required(CONF_EMAIL):    str,
-                vol.Required(CONF_PASSWORD): str,
-            }),
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema({
+                    vol.Required(CONF_EMAIL):    str,
+                    vol.Required(CONF_PASSWORD): str,
+                }),
+                {CONF_EMAIL: self._email} if self._email else {},
+            ),
             errors=errors,
         )
 
@@ -72,8 +103,12 @@ class ZondConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_friends(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        if user_input is not None:
-            selected = user_input.get(CONF_SELECTED_FRIENDS, [])
+        if user_input is not None or not self._all_friends:
+            # Друзей пока нет вовсе — отслеживаем всех (None), чтобы новые
+            # друзья появились сами, а не отфильтровались пустым списком.
+            selected = (
+                user_input.get(CONF_SELECTED_FRIENDS, []) if user_input is not None else None
+            )
             return self.async_create_entry(
                 title=self._token_data["user"].get("display_name", self._email),
                 data={
@@ -91,17 +126,42 @@ class ZondConfigFlow(ConfigFlow, domain=DOMAIN):
         all_uids = [f["uid"] for f in self._all_friends]
         return self.async_show_form(
             step_id="friends",
-            data_schema=vol.Schema({
-                vol.Required(CONF_SELECTED_FRIENDS, default=all_uids):
-                    SelectSelector(SelectSelectorConfig(
-                        options=[
-                            {"value": f["uid"], "label": f["name"]}
-                            for f in self._all_friends
-                        ],
-                        multiple=True,
-                        mode=SelectSelectorMode.LIST,
-                    )),
-            }),
+            data_schema=_friends_schema(self._all_friends, all_uids),
+        )
+
+    # ── Повторная авторизация ─────────────────────────────────────────────
+
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        entry = self._get_reauth_entry()
+        email = entry.data[CONF_EMAIL]
+
+        if user_input is not None:
+            password = user_input[CONF_PASSWORD]
+            token_data = await _async_login(self.hass, email, password, errors)
+            if token_data is not None:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={
+                        CONF_PASSWORD:   password,
+                        "access_token":  token_data["access_token"],
+                        "refresh_token": token_data["refresh_token"],
+                        "expires_at":    token_data["expires_at"],
+                    },
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({vol.Required(CONF_PASSWORD): str}),
+            description_placeholders={"email": email},
+            errors=errors,
         )
 
     # ── Options flow ───────────────────────────────────────────────────────
@@ -109,17 +169,15 @@ class ZondConfigFlow(ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        return ZondOptionsFlow(config_entry)
+        return ZondOptionsFlow()
 
 
 class ZondOptionsFlow(OptionsFlow):
-    def __init__(self, entry: ConfigEntry) -> None:
-        self._entry = entry
-
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        coordinator = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id)
+        entry = self.config_entry
+        coordinator = self.hass.data.get(DOMAIN, {}).get(entry.entry_id)
 
         if user_input is not None:
             return self.async_create_entry(
@@ -134,41 +192,39 @@ class ZondOptionsFlow(OptionsFlow):
                 for uid, p in coordinator.profiles.items()
             ]
         else:
-            # Fallback: перелогиниваемся чтобы получить список
+            # Fallback: перелогиниваемся, чтобы получить список. Без списка
+            # форму не показываем — иначе сохранился бы пустой выбор.
+            errors: dict[str, str] = {}
+            token_data = await _async_login(
+                self.hass, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD], errors
+            )
+            if token_data is None:
+                return self.async_abort(reason=errors["base"])
             try:
-                token_data = await self.hass.async_add_executor_job(
-                    validate_credentials,
-                    self._entry.data[CONF_EMAIL],
-                    self._entry.data[CONF_PASSWORD],
-                )
                 friends = await self.hass.async_add_executor_job(
                     _fetch_friend_list, token_data["access_token"]
                 )
-            except Exception:
-                friends = []
+            except CannotConnect:
+                return self.async_abort(reason="cannot_connect")
 
-        current = self._entry.options.get(CONF_SELECTED_FRIENDS, [])
+        current = entry.options.get(CONF_SELECTED_FRIENDS)
+        if current is None:  # None = отслеживаются все
+            current = [f["uid"] for f in friends]
 
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema({
-                vol.Required(CONF_SELECTED_FRIENDS, default=current):
-                    SelectSelector(SelectSelectorConfig(
-                        options=[
-                            {"value": f["uid"], "label": f["name"]}
-                            for f in friends
-                        ],
-                        multiple=True,
-                        mode=SelectSelectorMode.LIST,
-                    )),
-            }),
+            data_schema=_friends_schema(friends, current),
         )
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 def _fetch_friend_list(access_token: str) -> list[dict]:
-    """Подключается к зонду и получает список друзей (синхронно через asyncio.run)."""
+    """Подключается к зонду и получает список друзей (синхронно через asyncio.run).
+
+    Бросает CannotConnect, если список получить не удалось. Пустой список
+    возвращается только когда сервер честно прислал initialState без друзей.
+    """
     import asyncio
     import json
     import websockets as _ws
@@ -186,9 +242,11 @@ def _fetch_friend_list(access_token: str) -> list[dict]:
                         {"uid": p["id"], "name": p.get("name", p["id"][:8])}
                         for p in msg["payload"].get("profiles", [])
                     ]
-        return []
+        raise CannotConnect("initialState не пришёл")
 
     try:
         return asyncio.run(_get())
-    except Exception:
-        return []
+    except CannotConnect:
+        raise
+    except Exception as exc:
+        raise CannotConnect(f"{type(exc).__name__}: {exc}") from exc

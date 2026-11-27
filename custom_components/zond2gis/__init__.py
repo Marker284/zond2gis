@@ -31,6 +31,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         expires_at=entry.data["expires_at"],
         selected_friends=selected,
         on_token_refreshed=_save_token,
+        on_auth_failed=lambda: entry.async_start_reauth(hass),
     )
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
@@ -40,17 +41,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await coordinator.async_start()
 
-    # Перезагружаем entry при изменении options (выбор друзей)
-    entry.async_on_unload(
-        entry.add_update_listener(_async_options_updated)
-    )
+    # Update listener срабатывает на любое изменение entry, в том числе на
+    # сохранение токена в entry.data. Перезагружаемся только если поменялись
+    # options (выбор друзей), иначе каждый перелогин рвал бы WebSocket.
+    setup_options = dict(entry.options)
+
+    async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+        if dict(entry.options) != setup_options:
+            await hass.config_entries.async_reload(entry.entry_id)
+
+    entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
 
     return True
-
-
-async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Вызывается когда пользователь меняет список друзей в options flow."""
-    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

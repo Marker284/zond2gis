@@ -15,13 +15,23 @@
         "data": {
           "selected_friends": "Друзья"
         }
+      },
+      "reauth_confirm": {
+        "title": "Повторный вход в 2GIS",
+        "description": "2GIS не принял сохранённый пароль для {email}. Введите актуальный пароль.",
+        "data": {
+          "password": "Пароль"
+        }
       }
     },
     "error": {
-      "invalid_auth": "Неверный email или пароль"
+      "invalid_auth": "Неверный email или пароль",
+      "cannot_connect": "Не удалось подключиться к 2GIS, попробуйте позже",
+      "unknown": "Непредвиденная ошибка"
     },
     "abort": {
-      "already_configured": "Аккаунт уже добавлен"
+      "already_configured": "Аккаунт уже добавлен",
+      "reauth_successful": "Повторный вход выполнен"
     }
   },
   "options": {
@@ -33,6 +43,11 @@
           "selected_friends": "Друзья"
         }
       }
+    },
+    "abort": {
+      "invalid_auth": "Неверный email или пароль",
+      "cannot_connect": "Не удалось подключиться к 2GIS, попробуйте позже",
+      "unknown": "Непредвиденная ошибка"
     }
   },
   "entity": {
@@ -43,19 +58,19 @@
       "movement": {
         "name": "Движение",
         "state": {
-          "stopped":  "Стоит",
-          "moving":   "Едет",
-          "no_geo":   "Нет GPS",
-          "unknown":  "Неизвестно"
+          "stopped": "Стоит",
+          "moving": "Едет",
+          "no_geo": "Нет GPS",
+          "unknown": "Неизвестно"
         }
       },
       "place": {
         "name": "Место",
         "state": {
-          "home":     "Дом",
-          "work":     "Работа",
-          "shop":     "Магазин",
-          "unknown":  "Неизвестно"
+          "home": "Дом",
+          "work": "Работа",
+          "shop": "Магазин",
+          "unknown": "Неизвестно"
         }
       },
       "speed": {
