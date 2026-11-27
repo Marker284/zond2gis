@@ -14,6 +14,9 @@ from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
 )
 
 from .coordinator import AuthFailed, CannotConnect, validate_credentials
@@ -22,6 +25,13 @@ _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "zond2gis"
 CONF_SELECTED_FRIENDS = "selected_friends"
+
+EMAIL_SELECTOR = TextSelector(
+    TextSelectorConfig(type=TextSelectorType.EMAIL, autocomplete="username")
+)
+PASSWORD_SELECTOR = TextSelector(
+    TextSelectorConfig(type=TextSelectorType.PASSWORD, autocomplete="current-password")
+)
 
 
 def _friends_schema(friends: list[dict], default: list[str]) -> vol.Schema:
@@ -90,8 +100,8 @@ class ZondConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=self.add_suggested_values_to_schema(
                 vol.Schema({
-                    vol.Required(CONF_EMAIL):    str,
-                    vol.Required(CONF_PASSWORD): str,
+                    vol.Required(CONF_EMAIL):    EMAIL_SELECTOR,
+                    vol.Required(CONF_PASSWORD): PASSWORD_SELECTOR,
                 }),
                 {CONF_EMAIL: self._email} if self._email else {},
             ),
@@ -159,7 +169,7 @@ class ZondConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=vol.Schema({vol.Required(CONF_PASSWORD): str}),
+            data_schema=vol.Schema({vol.Required(CONF_PASSWORD): PASSWORD_SELECTOR}),
             description_placeholders={"email": email},
             errors=errors,
         )

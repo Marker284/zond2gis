@@ -9,5 +9,5 @@
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/Marker284/zond2gis/issues",
   "requirements": ["websockets>=12.0"],
-  "version": "1.0.7"
+  "version": "1.0.8"
 }
